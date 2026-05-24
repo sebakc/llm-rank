@@ -22,36 +22,40 @@ No more juggling three browser tabs to figure out whether DeepSeek-Coder is chea
 
 ## Install
 
-Uses [uv](https://github.com/astral-sh/uv) for env + deps.
+Uses [uv](https://github.com/astral-sh/uv).
 
 ```bash
-git clone https://github.com/yourname/llm-rank ~/projects/skills/llm-rank
-cd ~/projects/skills/llm-rank
-uv venv
-uv pip install -e ".[dev]"
-```
-
-Optional extras:
-
-```bash
-uv pip install -e ".[gpu]"   # adds torch for CUDA VRAM detection
-```
-
-Run via uv (no activation needed):
-
-```bash
-uv run llm-rank --version
-uv run pytest
-```
-
-Or put it on PATH so any shell (and the Claude skill) can find it:
-
-```bash
-sudo ln -sf "$PWD/.venv/bin/llm-rank" /usr/local/bin/llm-rank
+git clone https://github.com/sebakc/llm-rank
+cd llm-rank
+uv tool install .
 llm-rank --version
 ```
 
-> No uv? Fallback: `python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`.
+`uv tool install` creates an isolated env and puts `llm-rank` on your PATH — no `source .venv/bin/activate` ever.
+
+Optional GPU extras (for local VRAM detection via torch):
+
+```bash
+uv tool install ".[gpu]"
+```
+
+Upgrade / remove:
+
+```bash
+uv tool upgrade llm-rank
+uv tool uninstall llm-rank
+```
+
+### Dev install (editable, for hacking)
+
+```bash
+uv venv
+uv pip install -e ".[dev]"
+uv run pytest
+uv run llm-rank ...
+```
+
+> No uv? Fallback: `pipx install .` (or `pip install --user .`).
 
 ---
 
