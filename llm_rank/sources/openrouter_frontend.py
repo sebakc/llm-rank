@@ -163,6 +163,8 @@ def _build_row(m: dict[str, Any]) -> dict[str, Any] | None:
         "hf_slug": m.get("hf_slug"),
         "context_len": m.get("context_length"),
         "created_at": m.get("created_at"),
+        "knowledge_cutoff": m.get("knowledge_cutoff"),
+        "supports_reasoning": bool(m.get("supports_reasoning")),
         "input_modalities": m.get("input_modalities"),
         "output_modalities": m.get("output_modalities"),
         **agg,

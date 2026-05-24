@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, cache, hardware, recommend
+from . import __version__, cache, config, hardware, recommend, updater
 from .models import Constraints, Recommendation
 
 VALID_FORMATS = ("table", "csv", "json")
@@ -124,8 +124,8 @@ def _providers_text(provs: list[str] | None, best: str | None = None) -> str:
     return f"{head}" + (f" ×{len(uniq)}" if extra else "")
 
 
-def _provider_pricing_text(pp: list[dict] | None, limit: int = 6) -> Text:
-    """One line per provider: 'Name  $in/$out'. Cheapest first."""
+def _provider_pricing_text(pp: list[dict] | None, limit: int = 6, detailed: bool = False) -> Text:
+    """One line per provider: 'Name  $in/$out' (+ quant + cache in detailed)."""
     if not pp:
         return Text("—", style="dim")
     lines = Text()
@@ -135,6 +135,9 @@ def _provider_pricing_text(pp: list[dict] | None, limit: int = 6) -> Text:
         name = p.get("provider") or "?"
         pi = p.get("price_in_per_m")
         po = p.get("price_out_per_m")
+        pc = p.get("price_cache_per_m")
+        quant = p.get("quantization") or ""
+        quant_str = "" if quant in ("", "unknown") else f" {quant}"
         if pi is None and po is None:
             price_part = "—"
             style = "dim"
@@ -142,12 +145,41 @@ def _provider_pricing_text(pp: list[dict] | None, limit: int = 6) -> Text:
             pi_s = f"${pi:.2f}" if pi is not None else "—"
             po_s = f"${po:.2f}" if po is not None else "—"
             price_part = f"{pi_s}/{po_s}"
+            if detailed and pc is not None:
+                price_part += f" c${pc:.2f}"
             style = "green" if i == 0 else None
-        lines.append(f"{name:<13.13} ", style="cyan")
+        if detailed:
+            lines.append(f"{name:<13.13}{quant_str:<6} ", style="cyan")
+        else:
+            lines.append(f"{name:<13.13} ", style="cyan")
         lines.append(price_part, style=style)
     if len(pp) > limit:
         lines.append(f"\n+{len(pp) - limit} more", style="dim")
     return lines
+
+
+def _cutoff_text(s: str | None) -> str:
+    if not s:
+        return "—"
+    return s[:7]  # YYYY-MM
+
+
+def _ctx_text(n: int | None) -> str:
+    if not n:
+        return "—"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1000:
+        return f"{n // 1000}k"
+    return str(n)
+
+
+def _model_name_with_badges(r: Recommendation, max_len: int) -> str:
+    name = _trunc(r.display_name, max_len)
+    if r.supports_reasoning:
+        # Brain emoji prefix; truncate further to keep total width.
+        return f"🧠 {_trunc(r.display_name, max_len - 2)}"
+    return name
 
 
 def _speed_text(tps: float | None) -> Text:
@@ -175,7 +207,7 @@ def _ttft_text(ms: float | None) -> Text:
     return Text(f"{s:4.1f}s", style=style)
 
 
-def _render_table(recs: list[Recommendation], c: Constraints) -> None:
+def _render_table(recs: list[Recommendation], c: Constraints, detailed: bool = False) -> None:
     bits = [f"task=[cyan]{c.task}[/cyan]", f"mode=[cyan]{c.mode}[/cyan]"]
     if c.mode == "cloud":
         if c.max_price is not None:
@@ -198,13 +230,17 @@ def _render_table(recs: list[Recommendation], c: Constraints) -> None:
         expand=False,
     )
     table.add_column("#", justify="right", style="dim", width=3)
-    table.add_column("Model", overflow="fold", min_width=14, max_width=20)
+    table.add_column("Model", overflow="fold", min_width=14, max_width=22)
     table.add_column("Quality", justify="left", width=14)
     table.add_column("Score", justify="right", width=7)
     if c.mode == "cloud":
         table.add_column("t/s", justify="right", width=5)
         table.add_column("TTFT", justify="right", width=5)
-        table.add_column("Providers ($in/$out per M)", overflow="fold", min_width=24)
+        table.add_column("Ctx", justify="right", style="dim", width=5)
+        if detailed:
+            table.add_column("Cutoff", justify="right", style="dim", width=8)
+        header = "Providers ($in/$out" + (" c$cache, quant" if detailed else "") + " per M)"
+        table.add_column(header, overflow="fold", min_width=24)
     else:
         table.add_column("VRAM", justify="right", width=8)
         table.add_column("Ctx", justify="right", style="dim", width=5)
@@ -229,14 +265,17 @@ def _render_table(recs: list[Recommendation], c: Constraints) -> None:
 
         row = [
             rank_text,
-            _trunc(r.display_name, 20),
+            _model_name_with_badges(r, 22),
             _quality_bar(r.quality),
             _score_text(r.score),
         ]
         if c.mode == "cloud":
             row.append(_speed_text(r.throughput_tps))
             row.append(_ttft_text(r.latency_ms))
-            row.append(_provider_pricing_text(r.provider_pricing))
+            row.append(_ctx_text(r.context_len))
+            if detailed:
+                row.append(_cutoff_text(r.knowledge_cutoff))
+            row.append(_provider_pricing_text(r.provider_pricing, detailed=detailed))
         else:
             row.append(cost_or_vram)
             row.append(ctx)
@@ -264,11 +303,20 @@ def main(
         False, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    no_update_check: bool = typer.Option(False, "--no-update-check", help="Skip background version check."),
 ) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    if not no_update_check:
+        latest, is_newer = updater.check_for_update()
+        if is_newer and latest:
+            console.print(
+                f"[yellow]llm-rank {latest} available[/yellow] "
+                f"(installed {__version__}). Run [cyan]llm-rank self-update[/cyan].",
+                highlight=False,
+            )
 
 
 @app.command("recommend")
@@ -282,6 +330,7 @@ def recommend_cmd(
     top: int = typer.Option(3, "--top", help="Number of recommendations."),
     json_out: bool = typer.Option(False, "--json", help="Shortcut for --format json."),
     fmt: str = typer.Option("table", "--format", help=f"Output: {' | '.join(VALID_FORMATS)}"),
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show extra columns: reasoning badge, cutoff date, quantization, cache price."),
     refresh: bool = typer.Option(False, "--refresh", help="Bypass cache and re-fetch sources."),
     rated_only: bool = typer.Option(False, "--rated-only", help="Hide models without HF leaderboard quality."),
 ) -> None:
@@ -322,7 +371,7 @@ def recommend_cmd(
     if not recs:
         console.print("[yellow]No models matched the given constraints.[/yellow]")
         raise typer.Exit(code=1)
-    _render_table(recs, c)
+    _render_table(recs, c, detailed=detailed)
 
 
 @app.command("list")
@@ -336,6 +385,7 @@ def list_cmd(
     min_quality: Optional[float] = typer.Option(None, "--min-quality", help="0..100 quality floor"),
     name_filter: Optional[str] = typer.Option(None, "--filter", "-f", help="Substring match on model id or display name (e.g. 'openai', 'anth')."),
     fmt: str = typer.Option("table", "--format", help=f"Output: {' | '.join(VALID_FORMATS)}"),
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show extra columns: reasoning badge, cutoff date, quantization, cache price."),
     refresh: bool = typer.Option(False, "--refresh"),
     rated_only: bool = typer.Option(False, "--rated-only", help="Hide unrated models."),
 ) -> None:
@@ -378,7 +428,7 @@ def list_cmd(
     if not recs:
         console.print("[yellow]No models.[/yellow]")
         raise typer.Exit(code=1)
-    _render_table(recs, c)
+    _render_table(recs, c, detailed=detailed)
 
 
 @app.command()
@@ -415,6 +465,90 @@ def hw() -> None:
         console.print(f"VRAM: {info.vram_gb:.1f} GB  ({info.gpu_name or 'unknown GPU'})")
     else:
         console.print("VRAM: not detected (no CUDA torch / nvidia-smi)")
+
+
+@app.command("self-update")
+def self_update_cmd(
+    check: bool = typer.Option(False, "--check", help="Only check; do not install."),
+) -> None:
+    """Upgrade llm-rank to the latest release from GitHub."""
+    latest, is_newer = updater.check_for_update(force=True)
+    if latest is None:
+        console.print("[red]Could not reach update endpoint.[/red]")
+        raise typer.Exit(code=2)
+    console.print(f"installed: [cyan]{__version__}[/cyan]   latest: [cyan]{latest}[/cyan]")
+    if not is_newer:
+        console.print("[green]Already up to date.[/green]")
+        return
+    if check:
+        console.print("Run [cyan]llm-rank self-update[/cyan] to upgrade.")
+        return
+    cmd = updater.self_update_command()
+    console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+    ok, output = updater.run_self_update()
+    if output:
+        console.print(output)
+    if ok:
+        console.print(f"[green]Upgraded to {latest}.[/green]")
+    else:
+        console.print("[red]Upgrade failed.[/red]")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def bands(
+    init: bool = typer.Option(False, "--init", help="Write a starter config file."),
+) -> None:
+    """Show price bands used for --budget low|med|high (and the catalog distribution)."""
+    if init:
+        path = config.write_default_config()
+        console.print(f"[green]Config written:[/green] {path}")
+        return
+
+    active = config.load_bands()
+    src = "default"
+    if config.CONFIG_PATH.exists():
+        src = f"{config.CONFIG_PATH} (overrides default)"
+    console.print(f"[bold]Active bands[/bold]  ({src}):")
+    for tier, band in active.items():
+        weight = recommend.BUDGET_COST_WEIGHTS.get(tier, "?")
+        console.print(f"  [cyan]{tier:<5}[/cyan] {config.band_label(band):<22} cost_weight={weight}")
+
+    # Live distribution snapshot from the cached OR catalog.
+    try:
+        rows = recommend.load_openrouter_frontend()
+    except Exception:  # noqa: BLE001
+        rows = []
+    prices = []
+    for r in rows:
+        pi = r.get("price_in_per_m")
+        po = r.get("price_out_per_m")
+        if pi is not None and po is not None and pi >= 0 and po >= 0:
+            prices.append((pi + po) / 2)
+    if prices:
+        prices.sort()
+        n = len(prices)
+        def pct(p: float) -> float:
+            return prices[min(n - 1, int(n * p))]
+        console.print()
+        console.print(f"[dim]Catalog distribution ({n} models):[/dim]")
+        for p in (0.10, 0.25, 0.50, 0.75, 0.90, 0.99):
+            console.print(f"  [dim]p{int(p * 100):>2}: ${pct(p):.2f}/M[/dim]")
+        # Count models per active tier.
+        counts = {tier: 0 for tier in active}
+        for price in prices:
+            for tier, (lo, hi) in active.items():
+                if price >= lo and (hi is None or price < hi):
+                    counts[tier] += 1
+                    break
+        console.print()
+        console.print("[dim]Models per tier:[/dim]")
+        for tier, cnt in counts.items():
+            console.print(f"  [dim]{tier:<5}: {cnt:>4} models[/dim]")
+
+    if not config.CONFIG_PATH.exists():
+        console.print()
+        console.print(f"[dim]To customize, run:[/dim] [cyan]llm-rank bands --init[/cyan]")
 
 
 @app.command()

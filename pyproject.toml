@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-rank"
-version = "0.1.0"
+version = "0.2.0"
 description = "Rank and recommend LLMs by quality, cost, speed, and hardware fit."
 requires-python = ">=3.10"
 readme = "README.md"

@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from . import cache, hardware, score
+from . import cache, config, hardware, score
 from .models import Constraints, ModelEntry, Recommendation
 from .sources import arena, hf, openrouter, openrouter_frontend
 
@@ -20,11 +20,12 @@ ARENA_CACHE_KEY = "arena_leaderboard"
 # Frontend perf data churns faster; refresh more aggressively.
 ORF_TTL_HOURS = 6.0
 
-# Budget cap in $/M tokens (price_avg)
-BUDGET_CAPS: dict[str, float] = {
-    "low": 1.0,
-    "med": 5.0,
-    "high": 50.0,
+# Per-tier cost weight override. The actual price band (min, max) comes
+# from `config.load_bands()` so users can override defaults via config.toml.
+BUDGET_COST_WEIGHTS: dict[str, float] = {
+    "low":  1.5,
+    "med":  0.5,
+    "high": 0.15,
 }
 
 
@@ -140,6 +141,8 @@ def merge(
             providers=orm.get("providers", []),
             provider_pricing=orm.get("provider_pricing", []),
             best_provider=orm.get("best_provider"),
+            supports_reasoning=bool(orm.get("supports_reasoning")),
+            knowledge_cutoff=orm.get("knowledge_cutoff"),
             provider="openrouter",
             available_cloud=True,
         )
@@ -176,16 +179,27 @@ def _apply_filters(
     hw: hardware.HardwareInfo | None,
     rated_only: bool = False,
 ) -> list[ModelEntry]:
+    bands = config.load_bands()
     out: list[ModelEntry] = []
     for e in entries:
         if c.mode == "cloud":
             if not e.available_cloud:
                 continue
-            cap = c.max_price
-            if cap is None and c.budget is not None:
-                cap = BUDGET_CAPS.get(c.budget)
-            if cap is not None and e.price_avg is not None and e.price_avg > cap:
+            # Explicit --max-price always wins.
+            if c.max_price is not None and e.price_avg is not None and e.price_avg > c.max_price:
                 continue
+            # Budget tier maps to a (min, max) band — exclusive separation.
+            if c.budget is not None and c.budget in bands:
+                lo, hi = bands[c.budget]
+                if e.price_avg is None:
+                    # Free / unpriced entries belong to the cheapest band only.
+                    if lo > 0:
+                        continue
+                else:
+                    if e.price_avg < lo:
+                        continue
+                    if hi is not None and e.price_avg >= hi:
+                        continue
         else:  # local
             if not e.available_local:
                 continue
@@ -235,6 +249,10 @@ def recommend(c: Constraints, refresh: bool = False, rated_only: bool = False) -
     if not or_rows:
         or_rows = load_openrouter(refresh=refresh)
     entries = merge(hf_rows, or_rows, arena_rows)
+    # Budget tier shifts cost weight so models inside the band re-order
+    # sensibly (low band → cheap wins, high band → quality wins).
+    if c.budget and c.budget in BUDGET_COST_WEIGHTS:
+        c.weights = {**c.weights, "cost": BUDGET_COST_WEIGHTS[c.budget]}
     hw = hardware.detect() if c.mode == "local" else None
     filtered = _apply_filters(entries, c, hw, rated_only=rated_only)
     ranked = score.rank(filtered, c)[: c.top]
@@ -266,6 +284,8 @@ def recommend(c: Constraints, refresh: bool = False, rated_only: bool = False) -
                 providers=list(e.providers),
                 provider_pricing=list(e.provider_pricing),
                 context_len=e.context_len,
+                supports_reasoning=e.supports_reasoning,
+                knowledge_cutoff=e.knowledge_cutoff,
             )
         )
     return recs

@@ -29,6 +29,8 @@ class ModelEntry:
     providers: list = field(default_factory=list)
     provider_pricing: list = field(default_factory=list)
     best_provider: Optional[str] = None
+    supports_reasoning: bool = False
+    knowledge_cutoff: Optional[str] = None
     provider: Optional[str] = None      # "openrouter" route id
     available_cloud: bool = False
     available_local: bool = False       # heuristic: open weights present
@@ -73,3 +75,5 @@ class Recommendation:
     providers: list = field(default_factory=list)
     provider_pricing: list = field(default_factory=list)
     context_len: Optional[int] = None
+    supports_reasoning: bool = False
+    knowledge_cutoff: Optional[str] = None
