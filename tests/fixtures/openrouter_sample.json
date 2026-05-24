@@ -1,0 +1,29 @@
+[
+  {
+    "model_id": "meta-llama/llama-3-8b-instruct",
+    "display_name": "Llama 3 8B Instruct",
+    "price_in": 0.07,
+    "price_out": 0.07,
+    "context_len": 8192,
+    "provider": "openrouter",
+    "available_cloud": true
+  },
+  {
+    "model_id": "deepseek/deepseek-coder",
+    "display_name": "DeepSeek Coder V2",
+    "price_in": 0.14,
+    "price_out": 0.28,
+    "context_len": 128000,
+    "provider": "openrouter",
+    "available_cloud": true
+  },
+  {
+    "model_id": "openai/gpt-4o",
+    "display_name": "GPT-4o",
+    "price_in": 5.00,
+    "price_out": 15.00,
+    "context_len": 128000,
+    "provider": "openrouter",
+    "available_cloud": true
+  }
+]

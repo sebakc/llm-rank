@@ -1,0 +1,20 @@
+[
+  {
+    "model_id": "meta-llama/Llama-3-8B-Instruct",
+    "display_name": "Llama-3-8B-Instruct",
+    "params_b": 8.0,
+    "quality": {"general": 68.4, "math": 55.0, "reasoning": 60.2, "coding": 50.0}
+  },
+  {
+    "model_id": "deepseek-ai/deepseek-coder-v2",
+    "display_name": "deepseek-coder-v2",
+    "params_b": 16.0,
+    "quality": {"general": 75.0, "coding": 88.0, "math": 70.0, "reasoning": 72.0}
+  },
+  {
+    "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+    "display_name": "Mistral-7B-Instruct-v0.3",
+    "params_b": 7.0,
+    "quality": {"general": 64.0, "coding": 45.0, "math": 40.0, "reasoning": 58.0}
+  }
+]
